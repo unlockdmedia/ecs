@@ -5,7 +5,7 @@ MAINTAINER Unlockd SRE <sre@unlockd.com>
 RUN apk add --no-cache bash curl tini py-pip python && \
     pip install --upgrade pip awscli boto3
 
-COPY ["scripts/*", "/scripts/"]
+COPY ["scripts", "/scripts"]
 
 WORKDIR /scripts
 CMD ["/bin/bash"]
