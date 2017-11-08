@@ -1,0 +1,256 @@
+#!/usr/bin/env python
+#
+# Zero downtime deployment of ECS instances
+
+from __future__ import print_function
+import yaml
+import argparse
+import sys
+import os
+from helper import *
+from aws_helper import *
+from component import *
+
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('command', help='command to execute', choices=['deploy'])
+    parser.add_argument('environment', help='environment used in cf_deployer')
+    parser.add_argument('component', help='the component in cf_deployer to act on')
+    parser.add_argument('--config-file', dest='config_file', required=True, help='the parsed cf_deployer yaml to read, use - to read from stdin')
+    parser.add_argument('--region', required=True, help='AWS region to deploy to')
+    return parser.parse_args()
+
+def load_config(path):
+    with open(path, 'r') if path is not '-' else sys.stdin as f:
+        for config in yaml.load_all(f):
+            pass
+        return config # return the last config
+
+def load_json(config_dir, filename):
+    path = os.path.join(config_dir, filename + '.json')
+    with open(path, 'r') as f:
+        return f.read()
+
+def warm_up_asg(asg_name, target_healthy_instance_count, aws):
+    def run():
+        n = aws.get_healthy_instance_count(asg_name)
+        if n < target_healthy_instance_count:
+            log('Found {} healthy instances, {} needed.'.format(n, target_healthy_instance_count))
+            return False
+        log('Found {} healthy instances.'.format(n))
+        return True
+
+    log('Warming up auto scaling group {} to {}'.format(asg_name, target_healthy_instance_count))
+
+    if not attempt(max_try=30, interval=10, what='check healthy instances', how=run):
+        raise Exception('Failed to detect {} healthy instances for auto scaling group {}'.format(target_healthy_instance_count, asg_name))
+
+def warm_up_stack(existing_asg_name, new_asg_name, aws):
+    existing_asg, new_asg = aws.get_asgs([existing_asg_name, new_asg_name])
+
+    existing_desired_capacity = existing_asg['DesiredCapacity']
+    desired_capacity = new_asg['DesiredCapacity']
+    min_size = new_asg['MinSize']
+    max_size = new_asg['MaxSize']
+
+    if existing_desired_capacity < min_size:
+        target_desired_capacity = min_size
+    elif existing_desired_capacity > max_size:
+        target_desired_capacity = max_size
+    else:
+        target_desired_capacity = existing_desired_capacity
+
+    if desired_capacity < target_desired_capacity:
+        log('Updating auto sacling group {} desired_capacity to {}'.format(new_asg_name, target_desired_capacity))
+        aws.set_desired_capacity(asg_name=new_asg_name, desired_capacity=target_desired_capacity)
+
+    warm_up_asg(asg_name=new_asg_name, target_healthy_instance_count=target_desired_capacity, aws=aws)
+
+def transfer_to_new_asg(cluster_name, existing_asg_name, new_asg_name, aws):
+    def get_last_service_event(service):
+        last_events = service['events'][:1]
+        if len(last_events) == 0:
+            return "None"
+        event = last_events[0]
+        return '{} {}'.format(event['createdAt'].strftime('%Y-%m-%d %H:%M:%S'), event['message'])
+
+    def run():
+        existing_tasks, new_tasks = aws.drain_ecs_instances(cluster_name=cluster_name, existing_asg_name=existing_asg_name, new_asg_name=new_asg_name)
+        log('{} of {} tasks have been transfered.'.format(len(new_tasks), len(new_tasks)+len(existing_tasks)))
+
+        services = aws.get_ecs_services(cluster_name=cluster_name)
+        for service in services:
+            log('Service {} {}/{} healthy. [Log: {}]'.format(service['serviceName'], service['runningCount'], service['desiredCount'], get_last_service_event(service)))
+
+        service_tasks_count = sum(service['runningCount'] for service in services)
+        existing_tasks_gone = len(existing_tasks) == 0
+        services_healthy = all(service['runningCount'] == service['desiredCount'] for service in services)
+        all_service_tasks_are_new = service_tasks_count <= len(new_tasks)
+
+        return existing_tasks_gone and services_healthy and all_service_tasks_are_new
+
+    log('Transfer ECS tasks from existing autoscaling group to new autoscaling group...')
+
+    if not attempt(max_try=50, interval=30, what='transfer ECS tasks', how=run):
+        raise Exception('Failed to transfer ECS tasks to auto scaling group {}'.format(new_asg_name))
+
+def create_stack(stack_name, template, component, aws):
+    args = {
+        'StackName': stack_name,
+        'TemplateBody': template,
+        'Parameters': component.inputs,
+        'Capabilities': component.capabilities,
+        'Tags': component.tags,
+        'DisableRollback': True,
+        'NotificationARNs': component.notify
+    }
+
+    if component.settings.get(':create-stack-policy'):
+        args['StackPolicyBody'] = load_json(config_dir, component.settings.get(':create-stack-policy'))
+
+    if len(template) > 51200:
+        raise Exception("{} does not support template larger than 51,200 bytes yet.".format(SCRIPT_NAME))
+
+    log("Creating stack {}...".format(stack_name))
+    aws.create_stack(args)
+    log("Stack {} created.".format(stack_name))
+
+def update_stack(stack_name, template, component, aws):
+    args = {
+        'StackName': stack_name,
+        'TemplateBody': template,
+        'Parameters': component.inputs,
+        'Capabilities': component.capabilities,
+        'Tags': component.tags,
+        'NotificationARNs': component.notify
+    }
+
+    if component.settings.get(':create-stack-policy'):
+        args['StackPolicyBody'] = load_json(config_dir, component.settings.get(':create-stack-policy'))
+
+    if component.settings.get(':override-stack-policy'):
+        args['StackPolicyDuringUpdateBody'] = load_json(config_dir, component.settings.get(':override-stack-policy'))
+
+    if len(template) > 51200:
+        raise Exception("{} does not support template larger than 51,200 bytes yet.".format(SCRIPT_NAME))
+
+    log("Updating stack {}...".format(stack_name))
+    aws.update_stack(args)
+    log("Stack {} updated.".format(stack_name))
+
+def delete_stack(stack_name, aws):
+    log("Deleting stack {}...".format(stack_name))
+    aws.delete_stack(stack_name)
+    log("Stack {} deleted.".format(stack_name))
+
+def get_asg_name_output(component):
+    outputs = component.settings.get(':auto-scaling-group-name-output', [])
+    if len(outputs) == 0:
+        if ':AutoScalingGroupName' in component.defined_outputs:
+            return 'AutoScalingGroupName'
+        raise Exception("You must define a AutoScalingGroupName output in your stack")
+
+    if len(outputs) == 1:
+        return outputs[0]
+
+    raise Exception("You defined more than 1 auto-scaling-group-name-output in your settings")
+
+def get_cluster_name_output(component):
+    outputs = component.settings.get(':ecs-cluster-name-output', [])
+    if len(outputs) == 0:
+        if ':ClusterName' in component.defined_outputs:
+            return 'ClusterName'
+        raise Exception("You must define a ClusterName output in your stack")
+
+    if len(outputs) == 1:
+        return outputs[0]
+
+    raise Exception("You defined more than 1 ecs-cluster-name-output in your settings")
+
+def get_stack_names(component, stack_outputs):
+    original_stack_name = component.get_stack_name(component.settings)
+    existing_stack_names = [candidate for candidate in [original_stack_name, original_stack_name + '-B', original_stack_name + '-G'] if candidate in stack_outputs]
+
+    if len(existing_stack_names) == 0:
+        return None, original_stack_name + '-B'
+
+    if len(existing_stack_names) == 1:
+        existing_stack_name = existing_stack_names[0]
+        if existing_stack_name == original_stack_name + '-B':
+            new_stack_name = original_stack_name + '-G'
+        else:
+            new_stack_name = original_stack_name + '-B'
+        return existing_stack_name, new_stack_name
+
+    raise Exception("There are more than 1 existing stack: {}. Please clean up first.".format(existing_stack_names))
+
+def replace_stack(existing_stack_name, new_stack_name, new_template, component, aws):
+    asg_output_key = get_asg_name_output(component)
+    cluster_output_key = get_cluster_name_output(component)
+
+    existing_asg_name = aws.get_output_from_stack(existing_stack_name, asg_output_key)
+    existing_cluster_name = aws.get_output_from_stack(existing_stack_name, cluster_output_key)
+
+    create_stack(stack_name=new_stack_name, template=new_template, component=component, aws=aws)
+
+    new_asg_name = aws.get_output_from_stack(new_stack_name, asg_output_key)
+    new_cluster_name = aws.get_output_from_stack(new_stack_name, cluster_output_key)
+
+    if existing_cluster_name != new_cluster_name:
+        raise Exception("New cluster name does not match existing cluster name. Your existing cluster is fine. And we just created an empty new cluster. We just won't continue from here.")
+    cluster_name = new_cluster_name
+
+    warm_up_stack(existing_asg_name=existing_asg_name, new_asg_name=new_asg_name, aws=aws)
+
+    transfer_to_new_asg(cluster_name=cluster_name, existing_asg_name=existing_asg_name, new_asg_name=new_asg_name, aws=aws)
+
+    if not component.settings.get(':keep-previous-stack', False):
+        delete_stack(stack_name=existing_stack_name, aws=aws)
+
+def deploy(component, aws, stack_outputs):
+    existing_stack_name, new_stack_name = get_stack_names(component=component, stack_outputs=stack_outputs)
+    template = load_json(component.config_dir, component.name)
+
+    if existing_stack_name is None:
+        create_stack(stack_name=new_stack_name, template=template, component=component, aws=aws)
+    else:
+        if component.strategy == 'ecs-replace-when-necessary':
+            changed = aws.is_cf_stack_changed(existing_stack_name=existing_stack_name, new_template=template, new_inputs=component.inputs, new_tags=component.tags)
+            if changed['template']:
+                log('Template changed')
+            else:
+                log('No change to template')
+
+            if changed['inputs']:
+                log('Intputs changed')
+            else:
+                log('No change to inputs')
+
+            if changed['tags']:
+                log('Tags changed')
+            else:
+                log('No change to tags')
+
+            if changed['template'] or changed['inputs']:
+                replace_stack(existing_stack_name=existing_stack_name, new_stack_name=new_stack_name, new_template=template, component=component, aws=aws)
+            elif changed['tags']:
+                update_stack(stack_name=existing_stack_name, template=template, component=component, aws=aws)
+            else:
+                log('No updates are to be performed on stack {}.'.format(existing_stack_name))
+
+        elif component.strategy == 'ecs-replace-always':
+            replace_stack(existing_stack_name=existing_stack_name, new_stack_name=new_stack_name, new_template=template, component=component, aws=aws)
+
+        else:
+            raise Exception("Unknown deployment strategy {}".format(component.strategy))
+
+def main():
+    args = get_args()
+    config = load_config(args.config_file)
+    aws = AWS(args.region)
+    stack_outputs = aws.get_all_cf_stack_outputs()
+    component = Component(config=config, name=args.component, environment=args.environment, region=args.region, stack_outputs=stack_outputs)
+    deploy(component=component, aws=aws, stack_outputs=stack_outputs)
+
+if __name__ == '__main__':
+    main()
