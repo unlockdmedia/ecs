@@ -18,6 +18,7 @@ def get_args():
     parser.add_argument('component', help='the component in cf_deployer to act on')
     parser.add_argument('--config-file', dest='config_file', required=True, help='the parsed cf_deployer yaml to read, use - to read from stdin')
     parser.add_argument('--region', required=True, help='AWS region to deploy to')
+    parser.add_argument('--deployment-strategy', dest='deployment_strategy', help='Override deployment strategy in the --config-file')
     return parser.parse_args()
 
 def load_config(path):
@@ -208,6 +209,8 @@ def replace_stack(existing_stack_name, new_stack_name, new_template, component, 
         delete_stack(stack_name=existing_stack_name, aws=aws)
 
 def deploy(component, aws, stack_outputs):
+    log('Deploying {} using {} strategy'.format(component.name, component.strategy))
+
     existing_stack_name, new_stack_name = get_stack_names(component=component, stack_outputs=stack_outputs)
     template = load_json(component.config_dir, component.name)
 
@@ -250,6 +253,8 @@ def main():
     aws = AWS(args.region)
     stack_outputs = aws.get_all_cf_stack_outputs()
     component = Component(config=config, name=args.component, environment=args.environment, region=args.region, stack_outputs=stack_outputs)
+    if args.deployment_strategy:
+        component.strategy = args.deployment_strategy
     deploy(component=component, aws=aws, stack_outputs=stack_outputs)
 
 if __name__ == '__main__':

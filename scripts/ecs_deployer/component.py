@@ -63,10 +63,7 @@ class Component(object):
         return self.config[':components'][':' + self.name].get(':notify', [])
 
     def get_component_deployment_strategy(self):
-        strategy = self.config[':components'][':' + self.name].get(':deployment-strategy', 'ecs-replace-when-necessary')
-        if not strategy.startswith('ecs-'):
-            raise Exception("Deployment strategy {} is not supported by {}".format(strategy, SCRIPT_NAME))
-        return strategy
+        return self.config[':components'][':' + self.name].get(':deployment-strategy', 'ecs-replace-when-necessary')
 
     def get_component_defined_outputs(self):
         return self.config[':components'][':' + self.name].get(':defined_outputs', {})
