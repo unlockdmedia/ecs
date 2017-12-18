@@ -111,7 +111,7 @@ def main():
 
     stack = get_stack_by_tags(tags, args.verbose, region)
     if stack is None:
-        sys.exit(1)
+        return
 
     alb_arn = get_stack_output(stack, args.alb_key, args.verbose)
     alb_listener_arn = get_stack_output(stack, args.listener_key, args.verbose)
