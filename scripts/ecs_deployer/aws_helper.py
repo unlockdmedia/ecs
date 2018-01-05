@@ -19,9 +19,10 @@ class AWS(object):
         existing_template = json.dumps(self.cf_client.get_template(StackName=existing_stack_name)['TemplateBody'], sort_keys=True)
         template_sorted = json.dumps(json.loads(new_template), sort_keys=True)
 
+        input_keys_to_compare = set(parameter['ParameterKey'] for parameter in self.cf_client.get_template_summary(StackName=existing_stack_name)['Parameters'] if not parameter['NoEcho'])
         existing_stack = one(self.cf_client.describe_stacks(StackName=existing_stack_name)['Stacks'])
-        existing_inputs = sorted(existing_stack['Parameters'], key=lambda i: i['ParameterKey'])
-        inputs_sorted = sorted(new_inputs, key=lambda i: i['ParameterKey'])
+        existing_inputs = sorted((p for p in existing_stack['Parameters'] if p['ParameterKey'] in input_keys_to_compare), key=lambda i: i['ParameterKey'])
+        inputs_sorted = sorted((i for i in new_inputs if i['ParameterKey'] in input_keys_to_compare), key=lambda i: i['ParameterKey'])
 
         existing_tags = sorted(existing_stack['Tags'], key=lambda tag: tag['Key'])
         tags_sorted = sorted(new_tags, key=lambda tag: tag['Key'])
