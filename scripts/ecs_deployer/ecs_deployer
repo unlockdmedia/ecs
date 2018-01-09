@@ -217,6 +217,10 @@ def deploy(component, aws, stack_outputs):
     if existing_stack_name is None:
         create_stack(stack_name=new_stack_name, template=template, component=component, aws=aws)
     else:
+        existing_stack = aws.get_cf_stack(stack_name=existing_stack_name)
+        if existing_stack['StackStatus'] in ['CREATE_FAILED', 'UPDATE_FAILED', 'DELETE_FAILED', 'UPDATE_ROLLBACK_COMPLETE']:
+            raise Exception("Deployment cannot continue because existing stack {} is in {} state. Please delete for fix the stack first.".format(existing_stack_name, existing_stack['StackStatus']))
+
         if component.strategy == 'ecs-replace-when-necessary':
             changed = aws.is_cf_stack_changed(existing_stack_name=existing_stack_name, new_template=template, new_inputs=component.inputs, new_tags=component.tags)
             if changed['template']:

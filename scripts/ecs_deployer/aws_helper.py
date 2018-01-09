@@ -15,6 +15,9 @@ class AWS(object):
         stacks = self.cf_resource.stacks.all()
         return { stack.stack_name: { output['OutputKey']: output['OutputValue'] for output in (stack.outputs or []) } for stack in stacks }
 
+    def get_cf_stack(self, stack_name):
+        return one(self.cf_client.describe_stacks(StackName=stack_name)['Stacks'])
+
     def is_cf_stack_changed(self, existing_stack_name, new_template, new_inputs, new_tags):
         existing_template = json.dumps(self.cf_client.get_template(StackName=existing_stack_name)['TemplateBody'], sort_keys=True)
         template_sorted = json.dumps(json.loads(new_template), sort_keys=True)
