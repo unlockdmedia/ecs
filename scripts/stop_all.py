@@ -30,12 +30,13 @@ def get_stop_urls(alb_arn, alb_listener_arn, region):
 
     urls = []
 
-    if ("Rules" in response):
-        for rule in response["Rules"]:
-            for condition in rule["Conditions"]:
-                urls.append('https://' + alb_dns_name + condition["Values"][0].replace('*', 'stop'))
-    else:
-        return None
+    for rule in response['Rules']:
+        if len(rule['Conditions']) == 0:
+            urls.append('https://' + alb_dns_name + '/stop')
+        else:
+            for condition in rule['Conditions']:
+                for value in condition['Values']:
+                    urls.append('https://' + alb_dns_name + value.replace('*', 'stop'))
 
     return urls
 
@@ -47,6 +48,7 @@ def get_args():
     parser.add_argument('--listener_key', required=True)
     parser.add_argument('-v', '--verbose', default=False, action='store_true')
     return parser.parse_args()
+
 
 def parse_tags(tags_string):
     parts = tags_string.split(',')
@@ -95,6 +97,9 @@ def stop(url, attempts):
             if r.status_code == 200:
                 print('Successfully stopped {}'.format(url))
                 return True
+            elif r.status_code in [503, 404]:
+                print('Stop attempt {} returns {} status code. Ignoring...'.format(url, r.status_code))
+                return True
 
     print('Failed to stop {} after {} attempts'.format(ip, attempts))
     return False
@@ -124,7 +129,7 @@ def main():
 
     urls = get_stop_urls(alb_arn, alb_listener_arn, region)
 
-    if (urls is None):
+    if len(urls) == 0:
         print('No rules defined in the ALB - nothing to stop')
     else:
         for url in urls:
