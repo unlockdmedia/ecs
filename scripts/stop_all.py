@@ -20,7 +20,7 @@ import requests
 import sys
 import json
 
-def get_stop_urls(alb_arn, alb_listener_arn, region):
+def get_stop_urls(alb_arn, alb_listener_arn, region, prefix):
     alb_client = boto3.client('elbv2', region_name=region)
 
     response = alb_client.describe_load_balancers(LoadBalancerArns=[alb_arn], )
@@ -28,17 +28,17 @@ def get_stop_urls(alb_arn, alb_listener_arn, region):
 
     response = alb_client.describe_rules(ListenerArn=alb_listener_arn, )
 
-    urls = []
+    paths = []
 
     for rule in response['Rules']:
         if len(rule['Conditions']) == 0:
-            urls.append('https://' + alb_dns_name + '/stop')
+            paths.append('/stop')
         else:
             for condition in rule['Conditions']:
                 for value in condition['Values']:
-                    urls.append('https://' + alb_dns_name + value.replace('*', 'stop'))
+                    paths.append(value.replace('*', 'stop'))
 
-    return urls
+    return ['https://' + alb_dns_name + path for path in paths if (prefix is None) or path.startswith(prefix)]
 
 
 def get_args():
@@ -46,6 +46,7 @@ def get_args():
     parser.add_argument('--tags', required=True)
     parser.add_argument('--alb_key', required=True)
     parser.add_argument('--listener_key', required=True)
+    parser.add_argument('--prefix', required=False)
     parser.add_argument('-v', '--verbose', default=False, action='store_true')
     return parser.parse_args()
 
@@ -57,10 +58,8 @@ def parse_tags(tags_string):
 
 
 def match_tags(stack, tags):
-    if len(stack.tags) != len(tags):
-        return False
-
-    return all(tags.get(tag['Key'], None) == tag['Value'] for tag in stack.tags)
+    stack_tags = {tag['Key']: tag['Value'] for tag in stack.tags}
+    return all(stack_tags.get(k) == v for k, v in tags.iteritems())
 
 
 def get_stack_by_tags(tags, verbose, region):
@@ -68,9 +67,13 @@ def get_stack_by_tags(tags, verbose, region):
     stacks = cloudformation.stacks.all()
 
     matched_stacks = [stack for stack in stacks if match_tags(stack, tags)]
-    if len(matched_stacks) != 1:
+    if len(matched_stacks) > 1:
         if verbose:
-            print('Found {} stacks with {}'.format(len(matched_stacks), tags), file=sys.stderr)
+            print('Found {} stacks with {}: {}'.format(len(matched_stacks), tags, [stack.stack_name for stack in matched_stacks]), file=sys.stderr)
+        sys.exit(1)
+    elif len(matched_stacks) == 0:
+        if verbose:
+            print('Found no stacks with {}'.format(tags), file=sys.stderr)
         return None
     return matched_stacks[0]
 
@@ -127,7 +130,7 @@ def main():
     if (alb_arn is None) or (alb_listener_arn is None):
         sys.exit(1)
 
-    urls = get_stop_urls(alb_arn, alb_listener_arn, region)
+    urls = get_stop_urls(alb_arn, alb_listener_arn, region, args.prefix)
 
     if len(urls) == 0:
         print('No rules defined in the ALB - nothing to stop')
