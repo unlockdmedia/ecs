@@ -5,8 +5,6 @@ set -euo pipefail
 export BUILD_NUMBER=$BUILDKITE_BUILD_NUMBER
 export TRIGGER_MESSAGE="Deploying ${TRIGGER_APPLICATION} Build ${BUILD_NUMBER} Commit: ${BUILDKITE_COMMIT}"
 
-source /etc/profile.d/buildkite-agent.sh
-
 echo "--- :package: Enabling Deployments onto other accounts"
 
 NEW_BUILD_JSON=$(
