@@ -20,7 +20,6 @@ NEW_BUILD_JSON=$(
       \"message\": \"${TRIGGER_MESSAGE}\",
       \"env\": {
         \"BUILD_NUMBER\": \"${BUILD_NUMBER}\",
-        \"PLATFORM_AMI_BUILD\": \"${PLATFORM_AMI_BUILD}\",
         \"ENVIRONMENT\": \"${TRIGGER_ENVIRONMENT}\",
         \"BUILD_CREATOR\": \"${BUILDKITE_BUILD_CREATOR}\",
         \"REPOSITORY_URL\": \"${REPOSITORY_URL}\"
