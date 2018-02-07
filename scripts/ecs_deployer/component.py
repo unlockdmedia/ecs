@@ -63,6 +63,16 @@ class Component(object):
         return self.config[':components'][':' + self.name].get(':notify', [])
 
     def get_component_deployment_strategy(self):
+        environmental_strategy = self.config \
+            .get(':environments', {}) \
+            .get(':' + self.environment, {}) \
+            .get(':components', {}) \
+            .get(':' + self.name, {}) \
+            .get(':deployment-strategy')
+
+        if environmental_strategy:
+            return environmental_strategy
+
         return self.config[':components'][':' + self.name].get(':deployment-strategy', 'ecs-replace-when-necessary')
 
     def get_component_defined_outputs(self):
