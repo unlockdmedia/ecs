@@ -78,16 +78,13 @@ def transfer_to_new_asg(cluster_name, existing_asg_name, new_asg_name, aws):
 
     def run():
         existing_tasks, new_tasks = aws.drain_ecs_instances(cluster_name=cluster_name, existing_asg_name=existing_asg_name, new_asg_name=new_asg_name)
-        log('{} of {} tasks have been transfered.'.format(len(new_tasks), len(new_tasks)+len(existing_tasks)))
-
         services = aws.get_ecs_services(cluster_name=cluster_name)
-        for service in services:
-            log('Service {} {}/{} healthy. [Log: {}]'.format(service['serviceName'], service['runningCount'], service['desiredCount'], get_last_service_event(service)))
-
         service_tasks_count = sum(service['runningCount'] for service in services)
         existing_tasks_gone = len(existing_tasks) == 0
         services_healthy = all(service['runningCount'] == service['desiredCount'] for service in services if len(service['placementConstraints']) == 0)
         all_service_tasks_are_new = service_tasks_count <= len(new_tasks)
+
+        log('Waiting for tasks to be transfered...')
 
         return existing_tasks_gone and services_healthy and all_service_tasks_are_new
 
