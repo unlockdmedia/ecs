@@ -27,11 +27,15 @@ class AWS(object):
         existing_inputs = sorted((p for p in existing_stack['Parameters'] if p['ParameterKey'] in input_keys_to_compare), key=lambda i: i['ParameterKey'])
         inputs_sorted = sorted((i for i in new_inputs if i['ParameterKey'] in input_keys_to_compare), key=lambda i: i['ParameterKey'])
 
+        delta_keys1 = [p['ParameterKey'] for p in existing_inputs if p not in inputs_sorted]
+        delta_keys2 = [p['ParameterKey'] for p in inputs_sorted if p not in existing_inputs]
+        delta_keys = sorted(list(set(delta_keys1 + delta_keys2)))
+
         existing_tags = sorted(existing_stack['Tags'], key=lambda tag: tag['Key'])
         tags_sorted = sorted(new_tags, key=lambda tag: tag['Key'])
 
         return {'template': existing_template != template_sorted,
-                'inputs': existing_inputs != inputs_sorted,
+                'inputs': delta_keys,
                 'tags': existing_tags != tags_sorted }
 
     def create_stack(self, args):
