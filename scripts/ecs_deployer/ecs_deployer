@@ -20,6 +20,7 @@ def get_args():
     parser.add_argument('--region', required=True, help='AWS region to deploy to')
     parser.add_argument('--deployment-strategy', dest='deployment_strategy', help='Override deployment strategy in the --config-file')
     parser.add_argument('--dryrun', default=False, action='store_true')
+    parser.add_argument('--size-parameters', dest='size_parameters', type=str, nargs='*', required=True, default=['MinSize', 'MaxSize'], help='List of size parameters in the stack. If only these parameters are changed and --deployment-strategy is ecs-replace-when-necessary, the stack will be updated rather then replaced.')
     return parser.parse_args()
 
 def load_config(path):
@@ -206,7 +207,7 @@ def replace_stack(existing_stack_name, new_stack_name, new_template, component, 
     if not component.settings.get(':keep-previous-stack', False):
         delete_stack(stack_name=existing_stack_name, aws=aws)
 
-def deploy(component, aws, stack_outputs, dryrun):
+def deploy(component, aws, stack_outputs, dryrun, size_parameters):
     if dryrun:
         log('Will deploying {} using {} strategy'.format(component.name, component.strategy))
         return
@@ -225,24 +226,19 @@ def deploy(component, aws, stack_outputs, dryrun):
 
         if component.strategy == 'ecs-replace-when-necessary':
             changed = aws.is_cf_stack_changed(existing_stack_name=existing_stack_name, new_template=template, new_inputs=component.inputs, new_tags=component.tags)
+
             if changed['template']:
-                log('Template changed')
-            else:
-                log('No change to template')
-
-            if changed['inputs']:
-                log('Intputs changed')
-            else:
-                log('No change to inputs')
-
-            if changed['tags']:
-                log('Tags changed')
-            else:
-                log('No change to tags')
-
-            if changed['template'] or changed['inputs']:
+                log('Template changed. Will replace stack')
                 replace_stack(existing_stack_name=existing_stack_name, new_stack_name=new_stack_name, new_template=template, component=component, aws=aws)
+            elif changed['inputs']:
+                if set(changed['inputs']) == set(size_parameters):
+                    log('Only size parameters changed. Will update stack')
+                    update_stack(stack_name=existing_stack_name, template=template, component=component, aws=aws)
+                else:
+                    log('Inputs changed. Will replace stack')
+                    replace_stack(existing_stack_name=existing_stack_name, new_stack_name=new_stack_name, new_template=template, component=component, aws=aws)
             elif changed['tags']:
+                log('Only tags changed. Will update stack')
                 update_stack(stack_name=existing_stack_name, template=template, component=component, aws=aws)
             else:
                 log('No updates are to be performed on stack {}.'.format(existing_stack_name))
@@ -261,7 +257,7 @@ def main():
     component = Component(config=config, name=args.component, environment=args.environment, region=args.region, stack_outputs=stack_outputs)
     if args.deployment_strategy:
         component.strategy = args.deployment_strategy
-    deploy(component=component, aws=aws, stack_outputs=stack_outputs, dryrun=args.dryrun)
+    deploy(component=component, aws=aws, stack_outputs=stack_outputs, dryrun=args.dryrun, size_parameters=args.size_parameters)
 
 if __name__ == '__main__':
     main()
