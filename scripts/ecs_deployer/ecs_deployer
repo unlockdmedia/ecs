@@ -20,7 +20,7 @@ def get_args():
     parser.add_argument('--region', required=True, help='AWS region to deploy to')
     parser.add_argument('--deployment-strategy', dest='deployment_strategy', help='Override deployment strategy in the --config-file')
     parser.add_argument('--dryrun', default=False, action='store_true')
-    parser.add_argument('--size-parameters', dest='size_parameters', type=str, nargs='*', required=True, default=['MinSize', 'MaxSize'], help='List of size parameters in the stack. If only these parameters are changed and --deployment-strategy is ecs-replace-when-necessary, the stack will be updated rather then replaced.')
+    parser.add_argument('--size-parameters', dest='size_parameters', type=str, nargs='*', default=['MinSize', 'MaxSize'], help='List of size parameters in the stack. If only these parameters are changed and --deployment-strategy is ecs-replace-when-necessary, the stack will be updated rather then replaced.')
     return parser.parse_args()
 
 def load_config(path):
