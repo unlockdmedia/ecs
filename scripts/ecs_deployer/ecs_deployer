@@ -235,7 +235,7 @@ def deploy(component, aws, stack_outputs, dryrun, size_parameters):
                     log('Only size parameters changed. Will update stack')
                     update_stack(stack_name=existing_stack_name, template=template, component=component, aws=aws)
                 else:
-                    log('Inputs changed. Will replace stack')
+                    log('Inputs {} changed. Will replace stack'.format(changed['inputs']))
                     replace_stack(existing_stack_name=existing_stack_name, new_stack_name=new_stack_name, new_template=template, component=component, aws=aws)
             elif changed['tags']:
                 log('Only tags changed. Will update stack')
