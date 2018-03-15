@@ -115,6 +115,8 @@ def poll(cluster_name, service_arn, attempts, interval, ecs_client):
         last_service_snapshot = service
         last_tasks_snapshot = tasks
 
+        sys.stdout.flush()
+
     return last_service_snapshot, False
 
 def match_image(service, full_image_name, ecs_client):
