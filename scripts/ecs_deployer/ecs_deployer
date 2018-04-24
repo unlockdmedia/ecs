@@ -98,7 +98,7 @@ def transfer_to_new_asg(cluster_name, existing_asg_name, new_asg_name, aws):
         if instance['status'].upper() == 'ACTIVE':
             aws.drain_ecs_instances(cluster_name=cluster_name, instance_arns=[instance['containerInstanceArn']])
             log('Draining existing ECS instance: {}'.format(instance['ec2InstanceId']))
-            if not attempt(max_try=50, interval=10, what='transfer ECS tasks', how=lambda: drain_successful(instance['containerInstanceArn'])):
+            if not attempt(max_try=50, interval=20, what='transfer ECS tasks', how=lambda: drain_successful(instance['containerInstanceArn'])):
                 raise Exception('Failed to transfer ECS tasks to auto scaling group {}'.format(new_asg_name))
             log('Sucessfully drained existing ECS instance: {}'.format(instance['ec2InstanceId']))
 
