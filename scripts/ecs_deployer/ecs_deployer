@@ -71,29 +71,38 @@ def warm_up_stack(existing_asg_name, new_asg_name, aws):
     warm_up_asg(asg_name=new_asg_name, target_healthy_instance_count=target_desired_capacity, aws=aws)
 
 def transfer_to_new_asg(cluster_name, existing_asg_name, new_asg_name, aws):
-    def get_last_service_event(service):
-        last_events = service['events'][:1]
-        if len(last_events) == 0:
-            return "None"
-        event = last_events[0]
-        return '{} {}'.format(event['createdAt'].strftime('%Y-%m-%d %H:%M:%S'), event['message'])
+    def drain_successful(drained_instance_arn):
+        existing_task_arns = aws.get_ecs_task_arns_by_ecs_instance(cluster_name=cluster_name, instance_arn=drained_instance_arn)
+        if len(existing_task_arns) > 0:
+            log('Waiting for {} tasks to be transfered or terminated...'.format(len(existing_task_arns)))
+            return False
+        return True
 
-    def run():
-        existing_tasks, new_tasks = aws.drain_ecs_instances(cluster_name=cluster_name, existing_asg_name=existing_asg_name, new_asg_name=new_asg_name)
-        services = aws.get_ecs_services(cluster_name=cluster_name)
-        service_tasks_count = sum(service['runningCount'] for service in services)
-        existing_tasks_gone = len(existing_tasks) == 0
-        services_healthy = all(service['runningCount'] == service['desiredCount'] for service in services if len(service['placementConstraints']) == 0)
-        all_service_tasks_are_new = service_tasks_count <= len(new_tasks)
+    all_ecs_instances = aws.get_ecs_instances(cluster_name=cluster_name)
+    existing_asg, new_asg = aws.get_asgs([existing_asg_name, new_asg_name])
 
-        log('Waiting for tasks to be transfered...')
+    existing_instance_ids = { i['InstanceId'] for i in existing_asg['Instances'] }
+    existing_ecs_instances = [i for i in all_ecs_instances if i['ec2InstanceId'] in existing_instance_ids]
 
-        return existing_tasks_gone and services_healthy and all_service_tasks_are_new
+    # set old instances to pre-drain state, individual services can opt-in to not schedule on pre-drain instances
+    # https://github.com/aws/amazon-ecs-agent/issues/672
+    aws.put_ecs_attributes(cluster_name=cluster_name, attributes=[{
+        'name': 'custom.state',
+        'value': 'pre-drain',
+        'targetType': 'container-instance',
+        'targetId': i['containerInstanceArn']
+    } for i in existing_ecs_instances])
 
-    log('Transfer ECS tasks from existing autoscaling group to new autoscaling group...')
+    # drain old instances one by one
+    for instance in existing_ecs_instances:
+        if instance['status'].upper() == 'ACTIVE':
+            aws.drain_ecs_instances(cluster_name=cluster_name, instance_arns=[instance['containerInstanceArn']])
+            log('Draining existing ECS instance: {}'.format(instance['ec2InstanceId']))
+            if not attempt(max_try=50, interval=10, what='transfer ECS tasks', how=lambda: drain_successful(instance['containerInstanceArn'])):
+                raise Exception('Failed to transfer ECS tasks to auto scaling group {}'.format(new_asg_name))
+            log('Sucessfully drained existing ECS instance: {}'.format(instance['ec2InstanceId']))
 
-    if not attempt(max_try=50, interval=30, what='transfer ECS tasks', how=run):
-        raise Exception('Failed to transfer ECS tasks to auto scaling group {}'.format(new_asg_name))
+    log('Successfully transferred all ECS tasks from {} to {}'.format(existing_asg_name, new_asg_name))
 
 def create_stack(stack_name, template, component, aws):
     args = {

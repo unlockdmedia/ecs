@@ -97,6 +97,9 @@ class AWS(object):
         tasks = flatten(get_tasks(arns) for arns in paginate(task_arns, page_size=100))
         return tasks
 
+    def get_ecs_task_arns_by_ecs_instance(self, cluster_name, instance_arn):
+        return flatten(p['taskArns'] for p in self.ecs_client.get_paginator('list_tasks').paginate(cluster=cluster_name, containerInstance=instance_arn, desiredStatus='RUNNING'))
+
     def get_ecs_services(self, cluster_name):
         def get_services(arns):
             response = self.ecs_client.describe_services(cluster=cluster_name, services=arns)
@@ -108,30 +111,10 @@ class AWS(object):
         services = flatten(get_services(arns) for arns in paginate(service_arns, page_size=10))
         return services
 
-    def drain_ecs_instances(self, cluster_name, existing_asg_name, new_asg_name):
-        def drain(ecs_instances):
-            instance_arns_to_drain = [i['containerInstanceArn'] for i in ecs_instances if i['status'].upper() == 'ACTIVE']
-            if len(instance_arns_to_drain) > 0:
-                response = self.ecs_client.update_container_instances_state(cluster=cluster_name, containerInstances=instance_arns_to_drain, status='DRAINING')
-                if len(response['failures']) > 0:
-                    raise Exception("Failed to drain ECS instance. {}".format(response['failures']))
+    def drain_ecs_instances(self, cluster_name, instance_arns):
+        response = self.ecs_client.update_container_instances_state(cluster=cluster_name, containerInstances=instance_arns, status='DRAINING')
+        if len(response['failures']) > 0:
+            raise Exception("Failed to drain ECS instance. {}".format(response['failures']))
 
-        all_ecs_instances = self.get_ecs_instances(cluster_name)
-
-        existing_asg, new_asg = self.get_asgs([existing_asg_name, new_asg_name])
-
-        existing_instance_ids = { i['InstanceId'] for i in existing_asg['Instances'] }
-        existing_ecs_instances = [i for i in all_ecs_instances if i['ec2InstanceId'] in existing_instance_ids]
-        existing_instance_arns = { i['containerInstanceArn'] for i in existing_ecs_instances }
-
-        drain(existing_ecs_instances)
-
-        new_instance_ids = { i['InstanceId'] for i in new_asg['Instances'] }
-        new_ecs_instances = [i for i in all_ecs_instances if i['ec2InstanceId'] in new_instance_ids]
-        new_instance_arns = { i['containerInstanceArn'] for i in new_ecs_instances }
-
-        all_tasks = self.get_ecs_tasks(cluster_name=cluster_name)
-        existing_tasks = [t for t in all_tasks if t['containerInstanceArn'] in existing_instance_arns]
-        new_tasks = [t for t in all_tasks if t['containerInstanceArn'] in new_instance_arns]
-
-        return existing_tasks, new_tasks
+    def put_ecs_attributes(self, cluster_name, attributes):
+        self.ecs_client.put_attributes(cluster=cluster_name, attributes=attributes)
