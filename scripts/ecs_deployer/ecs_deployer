@@ -71,13 +71,6 @@ def warm_up_stack(existing_asg_name, new_asg_name, aws):
     warm_up_asg(asg_name=new_asg_name, target_healthy_instance_count=target_desired_capacity, aws=aws)
 
 def transfer_to_new_asg(cluster_name, existing_asg_name, new_asg_name, aws):
-    def drain_successful(drained_instance_arn):
-        existing_task_arns = aws.get_ecs_task_arns_by_ecs_instance(cluster_name=cluster_name, instance_arn=drained_instance_arn)
-        if len(existing_task_arns) > 0:
-            log('Waiting for {} tasks to be transfered or terminated...'.format(len(existing_task_arns)))
-            return False
-        return True
-
     all_ecs_instances = aws.get_ecs_instances(cluster_name=cluster_name)
     existing_asg, new_asg = aws.get_asgs([existing_asg_name, new_asg_name])
 
@@ -98,8 +91,25 @@ def transfer_to_new_asg(cluster_name, existing_asg_name, new_asg_name, aws):
         if instance['status'].upper() == 'ACTIVE':
             aws.drain_ecs_instances(cluster_name=cluster_name, instance_arns=[instance['containerInstanceArn']])
             log('Draining existing ECS instance: {}'.format(instance['ec2InstanceId']))
-            if not attempt(max_try=50, interval=20, what='transfer ECS tasks', how=lambda: drain_successful(instance['containerInstanceArn'])):
+
+            attempts = 1
+            max_attempts = 50
+            interval = 20
+            num_tasks_to_drain_previous = None
+
+            while attempts <= max_attempts:
+                drained_instance_arn = instance['containerInstanceArn']
+                num_tasks_to_drain = len(aws.get_ecs_task_arns_by_ecs_instance(cluster_name=cluster_name, instance_arn=drained_instance_arn))
+                if num_tasks_to_drain <= 0:
+                    break
+                if num_tasks_to_drain > 0:
+                    log('Waiting for {} tasks to be transfered or terminated ({} more attempts left).'.format(num_tasks_to_drain, max_attempts-attempts))
+                if num_tasks_to_drain_previous is not None and num_tasks_to_drain < num_tasks_to_drain_previous:
+                    max_attempts += 10 # add 10 more attempts if the number is dropping.
+                num_tasks_to_drain_previous = num_tasks_to_drain
+            else:
                 raise Exception('Failed to transfer ECS tasks to auto scaling group {}'.format(new_asg_name))
+
             log('Sucessfully drained existing ECS instance: {}'.format(instance['ec2InstanceId']))
 
     log('Successfully transferred all ECS tasks from {} to {}'.format(existing_asg_name, new_asg_name))
