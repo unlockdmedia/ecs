@@ -109,6 +109,7 @@ def transfer_to_new_asg(cluster_name, existing_asg_name, new_asg_name, aws):
                 num_tasks_to_drain_previous = num_tasks_to_drain
                 if attempts < max_attempts:
                     time.sleep(interval)
+                attempts += 1
             else:
                 raise Exception('Failed to transfer ECS tasks to auto scaling group {}'.format(new_asg_name))
 
